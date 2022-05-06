@@ -3,7 +3,7 @@ package j2n_test
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/ygt/j2n"
+	"github.com/Brawaru/j2n"
 )
 
 type CatData struct {
