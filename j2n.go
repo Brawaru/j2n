@@ -1,8 +1,6 @@
 // Package j2n allows arbitrary JSON to be marshaled into structs. Any JSON
 // fields that are not marshaled directly into the fields of the struct are put
-// into a field called 'Overflow', of type
-//
-// 	map[string]*json.RawMessage
+// into a field with type UnknownFields.
 //
 // This means that fields that are not explicitly named in the struct will
 // survive an Unmarshal/Marshal round trip.
@@ -10,23 +8,22 @@
 // To avoid recursive calls to MarshalJSON/UnmarshalJSON, use the following
 // pattern:
 //
-// 	type CatData struct {
-// 		Name     string                      `json:"name"`
-// 		Overflow map[string]*json.RawMessage `json:"-"`
-// 	}
+//  type CatData struct {
+//  	Name string        `json_helpers:"name"`
+//  	Rest UnknownFields `json_helpers:"-"`
+//  }
 //
-// 	type Cat struct {
-// 		CatData
-// 	}
+//  type Cat struct {
+//  	CatData
+//  }
 //
-// 	func (c *Cat) UnmarshalJSON(data []byte) error {
-// 		return j2n.UnmarshalJSON(data, &c.CatData)
-// 	}
+//  func (c *Cat) UnmarshalJSON(data []byte) error {
+//  	return j2n.UnmarshalJSON(data, &c.CatData)
+//  }
 //
-// 	func (c Cat) MarshalJSON() ([]byte, error) {
-// 		return j2n.MarshalJSON(c.CatData)
-// 	}
-//
+//  func (c Cat) MarshalJSON() ([]byte, error) {
+//  	return j2n.MarshalJSON(c.CatData)
+//  }
 package j2n
 
 import (
@@ -36,10 +33,14 @@ import (
 	"reflect"
 )
 
-// Parses the JSON-encoded data into the struct pointed to by v.
+type UnknownFields map[string]*json.RawMessage
+
+var unknownFieldsType = reflect.TypeOf((UnknownFields)(nil))
+
+// UnmarshalJSON parses the JSON-encoded data into the struct pointed to by v.
 //
 // This behaves exactly like json.Unmarshal, but any extra JSON fields that
-// are not explicitly named in the struct are unmarshaled in the 'Overflow'
+// are not explicitly named in the struct are unmarshalled in the 'Overflow'
 // field.
 //
 // The struct v must contain a field 'Overflow' of type
@@ -65,19 +66,19 @@ func UnmarshalJSON(data []byte, v interface{}) error {
 		return err
 	}
 
-	namedFieldsMap := make(map[string]*json.RawMessage)
+	namedFieldsMap := make(UnknownFields)
 	if err := json.Unmarshal(namedFieldsJSON, &namedFieldsMap); err != nil {
 		return err
 	}
 
-	for k, _ := range namedFieldsMap {
+	for k := range namedFieldsMap {
 		delete(overflow, k)
 	}
 
 	return nil
 }
 
-// Returns the JSON encoding of v, which must be a struct.
+// MarshalJSON returns the JSON encoding of v, which must be a struct.
 //
 // This behaves exactly like json.Marshal, but ensures that any extra fields
 // mentioned in v.Overflow are output alongside the explicitly named struct
@@ -90,7 +91,7 @@ func UnmarshalJSON(data []byte, v interface{}) error {
 func MarshalJSON(v interface{}) ([]byte, error) {
 	result := make(map[string]*json.RawMessage)
 
-	// Do a round trip of the named fields into a map[string]*json.RawMessage
+	// Do a round trip of the named fields into a map[string]*json_helpers.RawMessage
 	namedFieldsJSON, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
@@ -108,7 +109,7 @@ func MarshalJSON(v interface{}) ([]byte, error) {
 
 	for k, v := range overflow {
 		if _, ok := result[k]; ok {
-			errorText := fmt.Sprintf("Named field present in overflow: '%s'", k)
+			errorText := fmt.Sprintf("named field present in overflow: '%s'", k)
 			return nil, errors.New(errorText)
 		}
 		result[k] = v
@@ -126,17 +127,17 @@ func resetOverflowMap(v interface{}) (map[string]*json.RawMessage, error) {
 	if value, err := getOverflowFieldValue(v); err != nil {
 		return nil, err
 	} else {
-		overflow := make(map[string]*json.RawMessage)
+		overflow := make(UnknownFields)
 		value.Set(reflect.ValueOf(overflow))
 		return overflow, nil
 	}
 }
 
-func getOverflowMap(v interface{}) (map[string]*json.RawMessage, error) {
+func getOverflowMap(v interface{}) (UnknownFields, error) {
 	if value, err := getOverflowFieldValue(v); err != nil {
 		return nil, err
 	} else {
-		return value.Interface().(map[string]*json.RawMessage), nil
+		return value.Interface().(UnknownFields), nil
 	}
 }
 
@@ -150,26 +151,34 @@ func getOverflowFieldValue(v interface{}) (reflect.Value, error) {
 
 	// Check that we're dealing with a struct
 	if value.Type().Kind() != reflect.Struct {
-		errText := fmt.Sprintf("Expected struct, got %s", value.Type().Kind())
+		errText := fmt.Sprintf("expected struct, got %s", value.Type().Kind())
 		return reflect.Value{}, errors.New(errText)
 	}
 
-	// Ensure the struct has a field called 'Overflow'
-	overflowField := value.FieldByName("Overflow")
-	if !overflowField.IsValid() {
-		return reflect.Value{}, errors.New("Overflow field is missing")
+	var field reflect.Value
+	var fieldIndex = -1
+	for i := 0; i < value.NumField(); i++ {
+		f := value.Field(i)
+
+		if f.Type() == unknownFieldsType {
+			if fieldIndex == -1 {
+				field = f
+				fieldIndex = i
+			} else {
+				return reflect.Value{}, errors.New("multiple unknown fields")
+			}
+		}
 	}
 
-	// And that the field has type map[string]*json.RawMessage
-	if overflowField.Type() != reflect.TypeOf(make(map[string]*json.RawMessage)) {
-		return reflect.Value{}, errors.New("Overflow must be of type map[string]*json.RawMessage")
+	// Check that we actually found the field
+	if fieldIndex == -1 {
+		return reflect.Value{}, errors.New("field is not defined")
 	}
 
 	// And that it has a tag ensuring that it is omitted from the JSON output
-	overflowFieldType, _ := value.Type().FieldByName("Overflow")
-	if overflowFieldType.Tag != `json:"-"` {
-		return reflect.Value{}, errors.New("Overflow must be of type map[string]*json.RawMessage")
+	if val, ok := value.Type().Field(fieldIndex).Tag.Lookup("json"); !ok || val != "-" {
+		return reflect.Value{}, errors.New("unknown fields must be ignored by the standard marshaller (use `json:\"-\"`)")
 	}
 
-	return overflowField, nil
+	return field, nil
 }

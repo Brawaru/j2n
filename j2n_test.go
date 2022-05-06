@@ -67,7 +67,7 @@ func TestReturnsErrorWithIncorrectOverflowFieldType(t *testing.T) {
 
 type PersonDataWithoutOverflowTag struct {
 	Name     string `json:"name"`
-	Overflow map[string]*json.RawMessage
+	Overflow UnknownFields
 }
 
 type PersonWithoutOverflowTag struct {
@@ -88,8 +88,8 @@ func TestReturnsErrorWhenOverflowTagMissing(t *testing.T) {
 }
 
 type PersonData struct {
-	Name     string                      `json:"name"`
-	Overflow map[string]*json.RawMessage `json:"-"`
+	Name     string        `json:"name"`
+	Overflow UnknownFields `json:"-"`
 }
 
 type Person struct {

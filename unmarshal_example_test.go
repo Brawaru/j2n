@@ -7,8 +7,8 @@ import (
 )
 
 type DogData struct {
-	Name     string                      `json:"name"`
-	Overflow map[string]*json.RawMessage `json:"-"`
+	Name     string            `json:"name"`
+	Overflow j2n.UnknownFields `json:"-"`
 }
 
 type Dog struct {
